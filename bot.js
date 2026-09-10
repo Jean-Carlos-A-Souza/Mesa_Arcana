@@ -21,15 +21,27 @@ function log(message) {
   console.log(`[${horarioBrasil()}] ${message}`);
 }
 
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function carregarConfig() {
+  if (!fs.existsSync(CONFIG_PATH)) throw new Error('config.json não encontrado.');
+
   const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 
   config.email = process.env.DAEVA_USER || config.email || config.usuario;
   config.senhaLogin = process.env.DAEVA_PASSWORD || config.senhaLogin || config.senha;
   config.senhaFicha = process.env.DAEVA_SHEET_PASSWORD || config.senhaFicha;
+  config.personagem = String(config.personagem || '').trim();
+  config.fichaUrl = String(config.fichaUrl || '').trim();
 
-  if (!config.fichaUrl) throw new Error('fichaUrl não configurada.');
-  if (!config.loginUrl) config.loginUrl = `${new URL(config.fichaUrl).origin}/login`;
+  const baseUrl = config.homeUrl || config.loginUrl || config.fichaUrl;
+  if (!baseUrl) throw new Error('Configure ao menos homeUrl, loginUrl ou fichaUrl.');
+
+  const origin = new URL(baseUrl).origin;
+  if (!config.homeUrl) config.homeUrl = origin;
+  if (!config.loginUrl) config.loginUrl = `${origin}/login`;
 
   sensitiveValues = [config.email, config.senhaLogin, config.senhaFicha]
     .map(v => String(v || '').trim())
@@ -43,12 +55,16 @@ function validarConfig(config) {
   if (!config.email || String(config.email).includes('COLOQUE_')) faltando.push('email');
   if (!config.senhaLogin || String(config.senhaLogin).includes('COLOQUE_')) faltando.push('senhaLogin');
   if (!config.senhaFicha || String(config.senhaFicha).includes('COLOQUE_')) faltando.push('senhaFicha');
+  if (!config.personagem || String(config.personagem).includes('COLOQUE_')) faltando.push('personagem');
   if (faltando.length) throw new Error(`Preencha no config.json: ${faltando.join(', ')}.`);
 }
 
 function limparSegredos(texto) {
   let output = String(texto ?? '');
-  for (const value of sensitiveValues) output = output.split(value).join('***');
+  for (const value of sensitiveValues) {
+    if (!value) continue;
+    output = output.split(value).join('***');
+  }
   return output;
 }
 
@@ -110,7 +126,17 @@ async function fazerLogin(page, config) {
   log('Login concluído.');
 }
 
-function mesmaFichaAtual(page, config) {
+function urlEhFicha(page) {
+  try {
+    return new URL(page.url()).pathname.startsWith('/ficha/');
+  } catch (_) {
+    return false;
+  }
+}
+
+function mesmaFichaConfigurada(page, config) {
+  if (!config.fichaUrl) return urlEhFicha(page);
+
   try {
     const atual = new URL(page.url());
     const alvo = new URL(config.fichaUrl);
@@ -120,21 +146,42 @@ function mesmaFichaAtual(page, config) {
   }
 }
 
-async function abrirSomenteFicha(page, config) {
-  log('Abrindo diretamente a ficha configurada.');
-  await page.goto(config.fichaUrl, { waitUntil: 'domcontentloaded' });
+async function abrirFichaConfigurada(page, config) {
+  log(`Abrindo a página principal e procurando a ficha "${config.personagem}".`);
+  await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1000);
+
+  const nomeExato = page.getByText(
+    new RegExp(`^${escapeRegExp(config.personagem)}$`, 'i')
+  ).first();
+
+  if (await nomeExato.isVisible().catch(() => false)) {
+    await nomeExato.scrollIntoViewIfNeeded().catch(() => {});
+    await nomeExato.click({ timeout: 7000 }).catch(() => null);
+    await page.waitForTimeout(1500);
+  }
+
+  if (!urlEhFicha(page)) {
+    if (!config.fichaUrl) {
+      await salvarDiagnostico(page, 'erro-ficha-nao-abriu');
+      throw new Error(`A ficha "${config.personagem}" não abriu e fichaUrl não foi configurada como fallback.`);
+    }
+
+    log('A abertura pelo cartão não foi confirmada; usando fichaUrl do config como fallback.');
+    await page.goto(config.fichaUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+  }
 
   if (page.url().toLowerCase().includes('/login')) {
     throw new Error('A sessão não permaneceu autenticada ao abrir a ficha.');
   }
 
-  if (!mesmaFichaAtual(page, config)) {
-    await salvarDiagnostico(page, 'erro-url-ficha');
-    throw new Error('A página atual não é a ficha configurada. Nenhum clique será feito.');
+  if (!mesmaFichaConfigurada(page, config)) {
+    await salvarDiagnostico(page, 'erro-ficha-diferente');
+    throw new Error('A página aberta não corresponde à ficha configurada. Nenhum clique será feito.');
   }
 
-  log('Ficha correta aberta pela URL direta.');
+  log(`Ficha configurada para "${config.personagem}" aberta.`);
 }
 
 async function desbloquearFicha(page, config) {
@@ -169,6 +216,19 @@ async function desbloquearFicha(page, config) {
   }
 
   log('Ficha revelada com sucesso.');
+}
+
+async function confirmarPersonagem(page, config) {
+  const nome = page.getByText(
+    new RegExp(`^${escapeRegExp(config.personagem)}$`, 'i')
+  ).first();
+
+  if (!(await nome.isVisible().catch(() => false))) {
+    await salvarDiagnostico(page, 'erro-personagem-nao-confirmado');
+    throw new Error(`Não consegui confirmar que a ficha aberta pertence a "${config.personagem}". Nenhum clique será feito.`);
+  }
+
+  log(`Personagem confirmado pela ficha: ${config.personagem}.`);
 }
 
 async function encontrarBotaoMeditar(page) {
@@ -206,9 +266,11 @@ async function estaDisponivel(button) {
 }
 
 async function tentarMeditar(page, config) {
-  if (!mesmaFichaAtual(page, config)) {
+  if (!mesmaFichaConfigurada(page, config)) {
     throw new Error('Proteção acionada: fora da ficha configurada. Nenhum clique será feito.');
   }
+
+  await confirmarPersonagem(page, config);
 
   const botao = await encontrarBotaoMeditar(page);
   if (!botao) {
@@ -223,8 +285,8 @@ async function tentarMeditar(page, config) {
     return;
   }
 
-  if (!mesmaFichaAtual(page, config)) {
-    throw new Error('Proteção acionada antes do clique: URL da ficha mudou.');
+  if (!mesmaFichaConfigurada(page, config)) {
+    throw new Error('Proteção acionada antes do clique: a ficha mudou.');
   }
 
   log('Meditação disponível. Clicando uma única vez em +1 QI.');
@@ -264,7 +326,7 @@ async function executar() {
     page.setDefaultTimeout(Number(config.timeoutMs || 30000));
 
     await fazerLogin(page, config);
-    await abrirSomenteFicha(page, config);
+    await abrirFichaConfigurada(page, config);
     await desbloquearFicha(page, config);
     await tentarMeditar(page, config);
 
