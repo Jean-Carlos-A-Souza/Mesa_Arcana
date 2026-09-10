@@ -19,9 +19,10 @@ jobs:
     timeout-minutes: 10
 
     env:
-      # O config.json funciona sozinho. Estes Secrets são apenas um override opcional.
+      # O config.json funciona sozinho. Estes Secrets são apenas overrides opcionais.
       DAEVA_USER: ${{ secrets.DAEVA_USER }}
       DAEVA_PASSWORD: ${{ secrets.DAEVA_PASSWORD }}
+      DAEVA_SHEET_PASSWORD: ${{ secrets.DAEVA_SHEET_PASSWORD }}
 
     steps:
       - name: Baixar código
