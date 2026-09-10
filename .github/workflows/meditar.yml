@@ -5,6 +5,14 @@ on:
     # GitHub usa UTC. O intervalo é o que importa: executa a cada 15 minutos.
     - cron: '*/15 * * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'config.json'
+      - 'bot.js'
+      - 'package.json'
+      - '.github/workflows/meditar.yml'
 
 permissions:
   contents: read
