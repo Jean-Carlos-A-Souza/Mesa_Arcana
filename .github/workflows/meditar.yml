@@ -2,8 +2,8 @@ name: Daeva - Auto Meditar
 
 on:
   schedule:
-    # GitHub usa UTC. O intervalo é o que importa: executa a cada 15 minutos.
-    - cron: '*/15 * * * *'
+    # Executa a cada 2 horas. GitHub usa UTC; minuto 17 evita o pico do início da hora.
+    - cron: '17 */2 * * *'
   workflow_dispatch:
   push:
     branches:
