@@ -1,8 +1,11 @@
 {
+  "loginUrl": "https://site-fichas-daeva1.vercel.app/login",
+  "homeUrl": "https://site-fichas-daeva1.vercel.app",
   "fichaUrl": "https://site-fichas-daeva1.vercel.app/ficha/1cbcd154-91e0-4cb7-8049-cafb923ecfac",
-  "loginUrl": "",
-  "usuario": "COLOQUE_SEU_USUARIO_AQUI",
-  "senha": "COLOQUE_SUA_SENHA_AQUI",
+  "personagem": "Han Zhen",
+  "email": "COLOQUE_SEU_EMAIL_AQUI",
+  "senhaLogin": "COLOQUE_A_SENHA_DE_LOGIN_AQUI",
+  "senhaFicha": "COLOQUE_A_SENHA_DA_FICHA_AQUI",
   "headless": true,
   "timeoutMs": 30000
 }
