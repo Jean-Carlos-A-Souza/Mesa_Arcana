@@ -1,0 +1,55 @@
+name: Daeva - Auto Meditar
+
+on:
+  schedule:
+    # GitHub usa UTC. O intervalo é o que importa: executa a cada 15 minutos.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daeva-auto-meditar
+  cancel-in-progress: false
+
+jobs:
+  meditar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # O config.json funciona sozinho. Estes Secrets são apenas um override opcional.
+      DAEVA_USER: ${{ secrets.DAEVA_USER }}
+      DAEVA_PASSWORD: ${{ secrets.DAEVA_PASSWORD }}
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: npm install --no-audit --no-fund
+
+      - name: Instalar Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Verificar código
+        run: npm run check
+
+      - name: Executar auto meditação
+        run: npm start
+
+      - name: Guardar diagnóstico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daeva-diagnostico-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
