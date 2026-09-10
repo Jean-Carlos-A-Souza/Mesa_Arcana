@@ -7,6 +7,7 @@ const ARTIFACTS = path.join(ROOT, 'artifacts');
 const CONFIG_PATH = path.join(ROOT, 'config.json');
 
 fs.mkdirSync(ARTIFACTS, { recursive: true });
+let sensitiveValues = [];
 
 function horarioBrasil() {
   return new Intl.DateTimeFormat('pt-BR', {
@@ -20,32 +21,70 @@ function log(message) {
   console.log(`[${horarioBrasil()}] ${message}`);
 }
 
+function limparSegredos(texto) {
+  let output = String(texto ?? '');
+  for (const value of sensitiveValues) {
+    if (!value) continue;
+    output = output.split(value).join('***');
+  }
+  return output;
+}
+
 function carregarConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error('config.json não encontrado.');
   }
 
   const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-  config.usuario = process.env.DAEVA_USER || config.usuario;
-  config.senha = process.env.DAEVA_PASSWORD || config.senha;
+
+  // Compatibilidade com a primeira versão do config.
+  config.email = process.env.DAEVA_USER || config.email || config.usuario;
+  config.senhaLogin = process.env.DAEVA_PASSWORD || config.senhaLogin || config.senha;
+  config.senhaFicha = process.env.DAEVA_SHEET_PASSWORD || config.senhaFicha;
+  config.personagem = config.personagem || 'Han Zhen';
 
   if (!config.fichaUrl) {
     throw new Error('fichaUrl não foi configurada.');
   }
 
+  if (!config.loginUrl) {
+    const origin = new URL(config.fichaUrl).origin;
+    config.loginUrl = `${origin}/login`;
+  }
+
+  if (!config.homeUrl) {
+    config.homeUrl = new URL(config.fichaUrl).origin;
+  }
+
+  sensitiveValues = [config.email, config.senhaLogin, config.senhaFicha]
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+
   return config;
 }
 
-function credenciaisConfiguradas(config) {
-  const usuario = String(config.usuario || '').trim();
-  const senha = String(config.senha || '').trim();
+function valorReal(value, placeholders = []) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  return !placeholders.some((p) => text.includes(p));
+}
 
-  return Boolean(
-    usuario &&
-    senha &&
-    !usuario.includes('COLOQUE_SEU_USUARIO') &&
-    !senha.includes('COLOQUE_SUA_SENHA')
-  );
+function validarConfig(config) {
+  const faltando = [];
+
+  if (!valorReal(config.email, ['COLOQUE_SEU_EMAIL', 'COLOQUE_SEU_USUARIO'])) {
+    faltando.push('email');
+  }
+  if (!valorReal(config.senhaLogin, ['COLOQUE_SUA_SENHA', 'COLOQUE_A_SENHA_DE_LOGIN'])) {
+    faltando.push('senhaLogin');
+  }
+  if (!valorReal(config.senhaFicha, ['COLOQUE_A_SENHA_DA_FICHA', 'COLOQUE_SUA_SENHA_DA_FICHA'])) {
+    faltando.push('senhaFicha');
+  }
+
+  if (faltando.length) {
+    throw new Error(`Preencha no config.json: ${faltando.join(', ')}.`);
+  }
 }
 
 async function primeiroVisivel(page, selectors) {
@@ -62,6 +101,7 @@ async function primeiroVisivel(page, selectors) {
 
 async function salvarDiagnostico(page, prefix) {
   const safePrefix = prefix.replace(/[^a-z0-9_-]/gi, '_');
+
   try {
     await page.screenshot({
       path: path.join(ARTIFACTS, `${safePrefix}.png`),
@@ -70,99 +110,179 @@ async function salvarDiagnostico(page, prefix) {
   } catch (_) {}
 
   try {
-    fs.writeFileSync(
-      path.join(ARTIFACTS, `${safePrefix}.html`),
-      await page.content(),
-      'utf8'
-    );
+    const html = limparSegredos(await page.content());
+    fs.writeFileSync(path.join(ARTIFACTS, `${safePrefix}.html`), html, 'utf8');
   } catch (_) {}
 }
 
-async function paginaTemLogin(page) {
-  const password = page.locator('input[type="password"]').first();
-  try {
-    return (await password.count()) > 0 && (await password.isVisible());
-  } catch (_) {
-    return false;
-  }
+async function telaDeLogin(page) {
+  const email = await primeiroVisivel(page, [
+    'input[type="email"]',
+    'input[name="email"]',
+    'input[autocomplete="username"]',
+    'input[placeholder*="exemplo.com" i]',
+    'input[placeholder*="email" i]',
+    'input[placeholder*="e-mail" i]'
+  ]);
+  const password = await primeiroVisivel(page, ['input[type="password"]']);
+  return Boolean(email && password);
 }
 
-async function fazerLoginSeNecessario(page, config) {
-  if (!(await paginaTemLogin(page))) {
-    log('Sessão já autenticada ou a ficha não exigiu login nesta etapa.');
-    return;
+async function fazerLogin(page, config) {
+  log('Abrindo tela de login.');
+  await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1000);
+
+  if (!(await telaDeLogin(page))) {
+    await salvarDiagnostico(page, 'erro-tela-login');
+    throw new Error('A tela de login não foi reconhecida.');
   }
 
-  log('Tela de login detectada. Preenchendo as credenciais.');
-
-  const userSelectors = [
-    'input[name="username"]',
-    'input[name="usuario"]',
-    'input[name="user"]',
-    'input[name="email"]',
+  const email = await primeiroVisivel(page, [
     'input[type="email"]',
+    'input[name="email"]',
     'input[autocomplete="username"]',
-    'input[placeholder*="usuário" i]',
-    'input[placeholder*="usuario" i]',
+    'input[placeholder*="exemplo.com" i]',
     'input[placeholder*="email" i]',
-    'input[placeholder*="user" i]',
-    'input:not([type="password"]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"])'
-  ];
+    'input[placeholder*="e-mail" i]'
+  ]);
+  const password = await primeiroVisivel(page, ['input[type="password"]']);
 
-  const usuario = await primeiroVisivel(page, userSelectors);
-  const senha = await primeiroVisivel(page, ['input[type="password"]']);
-
-  if (!usuario || !senha) {
-    await salvarDiagnostico(page, 'erro-login-campos');
-    throw new Error('Não consegui identificar os campos de usuário e senha.');
-  }
-
-  await usuario.fill(String(config.usuario));
-  await senha.fill(String(config.senha));
+  await email.fill(String(config.email));
+  await password.fill(String(config.senhaLogin));
 
   let submit = null;
-  const submitByRole = [/entrar/i, /login/i, /acessar/i, /sign\s*in/i];
 
-  for (const name of submitByRole) {
-    const candidate = page.getByRole('button', { name }).first();
-    try {
-      if ((await candidate.count()) > 0 && (await candidate.isVisible())) {
-        submit = candidate;
-        break;
-      }
-    } catch (_) {}
+  const form = password.locator('xpath=ancestor::form[1]');
+  if ((await form.count().catch(() => 0)) > 0) {
+    const candidate = form.locator('button[type="submit"], input[type="submit"]').last();
+    if ((await candidate.count().catch(() => 0)) > 0 && (await candidate.isVisible().catch(() => false))) {
+      submit = candidate;
+    }
   }
 
   if (!submit) {
-    submit = await primeiroVisivel(page, ['button[type="submit"]', 'input[type="submit"]']);
+    const byText = page.getByRole('button', { name: /^entrar$/i });
+    const count = await byText.count().catch(() => 0);
+    for (let i = count - 1; i >= 0; i--) {
+      const candidate = byText.nth(i);
+      if (await candidate.isVisible().catch(() => false)) {
+        submit = candidate;
+        break;
+      }
+    }
   }
 
+  log('Enviando login.');
   if (submit) {
-    await Promise.allSettled([
-      page.waitForLoadState('networkidle', { timeout: 10000 }),
-      submit.click({ timeout: 5000 })
-    ]);
+    await submit.click({ timeout: 7000 });
   } else {
-    await senha.press('Enter');
+    await password.press('Enter');
   }
 
-  await page.waitForTimeout(2500);
+  await Promise.race([
+    page.waitForURL((url) => !url.pathname.toLowerCase().includes('/login'), { timeout: 12000 }).catch(() => null),
+    page.getByText(/fichas de personagem/i).first().waitFor({ state: 'visible', timeout: 12000 }).catch(() => null)
+  ]);
+  await page.waitForTimeout(1000);
 
-  if (await paginaTemLogin(page)) {
+  if (await telaDeLogin(page)) {
     await salvarDiagnostico(page, 'erro-login-rejeitado');
-    throw new Error('O login continuou na tela. Usuário/senha podem estar incorretos ou o site mudou.');
+    throw new Error('O login não avançou. Confira o e-mail e a senha de login.');
   }
 
   log('Login concluído.');
 }
 
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function abrirFichaDoPersonagem(page, config) {
+  log(`Procurando a ficha "${config.personagem}" na página principal.`);
+
+  if (!page.url().startsWith(config.homeUrl)) {
+    await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+  }
+
+  const nome = page.getByText(new RegExp(`^${escapeRegExp(config.personagem)}$`, 'i')).first();
+
+  if ((await nome.count().catch(() => 0)) > 0 && (await nome.isVisible().catch(() => false))) {
+    await nome.scrollIntoViewIfNeeded().catch(() => {});
+    await nome.click({ timeout: 7000 }).catch(() => null);
+    await page.waitForTimeout(1500);
+  }
+
+  if (!page.url().includes('/ficha/')) {
+    log('Abertura pelo cartão não foi confirmada; usando a URL configurada da ficha como fallback.');
+    await page.goto(config.fichaUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1200);
+  }
+
+  if (!page.url().includes('/ficha/')) {
+    await salvarDiagnostico(page, 'erro-abrir-ficha');
+    throw new Error('Não foi possível abrir a ficha do personagem.');
+  }
+
+  log('Ficha aberta.');
+}
+
+async function fichaEstaProtegida(page) {
+  const heading = page.getByText(/ficha protegida/i).first();
+  if (await heading.isVisible().catch(() => false)) return true;
+
+  const input = await primeiroVisivel(page, [
+    'input[placeholder*="senha da ficha" i]',
+    'input[type="password"]'
+  ]);
+  const reveal = page.getByRole('button', { name: /revelar ficha/i }).first();
+  return Boolean(input && (await reveal.isVisible().catch(() => false)));
+}
+
+async function desbloquearFicha(page, config) {
+  if (!(await fichaEstaProtegida(page))) {
+    log('A ficha já está revelada nesta sessão.');
+    return;
+  }
+
+  log('Ficha protegida detectada. Inserindo a senha da ficha.');
+
+  const password = await primeiroVisivel(page, [
+    'input[placeholder*="senha da ficha" i]',
+    'input[type="password"]'
+  ]);
+  const reveal = page.getByRole('button', { name: /revelar ficha/i }).first();
+
+  if (!password || !(await reveal.isVisible().catch(() => false))) {
+    await salvarDiagnostico(page, 'erro-campos-senha-ficha');
+    throw new Error('Não consegui identificar o campo/botão para revelar a ficha.');
+  }
+
+  await password.fill(String(config.senhaFicha));
+  await reveal.click({ timeout: 7000 });
+  await page.waitForTimeout(1500);
+
+  if (await fichaEstaProtegida(page)) {
+    await salvarDiagnostico(page, 'erro-senha-ficha');
+    throw new Error('A ficha continuou bloqueada. Confira a senha da ficha.');
+  }
+
+  log('Ficha revelada com sucesso.');
+}
+
 async function encontrarBotaoMeditar(page) {
-  const roleCandidates = [
+  const candidates = [
+    page.getByRole('button', { name: /\+?\s*1\s*qi/i }),
     page.getByRole('button', { name: /meditar/i }),
-    page.getByRole('button', { name: /\+?\s*1\s*qi/i })
+    page.locator('button:has-text("+1 QI")'),
+    page.locator('button:has-text("1 QI")'),
+    page.locator('button:has-text("Meditar")'),
+    page.locator('[role="button"]:has-text("+1 QI")'),
+    page.locator('[role="button"]:has-text("Meditar")')
   ];
 
-  for (const group of roleCandidates) {
+  for (const group of candidates) {
     const count = await group.count().catch(() => 0);
     for (let i = 0; i < count; i++) {
       const locator = group.nth(i);
@@ -170,32 +290,14 @@ async function encontrarBotaoMeditar(page) {
     }
   }
 
-  const direct = await primeiroVisivel(page, [
-    'button:has-text("Meditar")',
-    'button:has-text("+1 QI")',
-    'button:has-text("1 QI")',
-    '[role="button"]:has-text("Meditar")',
-    '[role="button"]:has-text("+1 QI")',
-    '[role="button"]:has-text("1 QI")'
-  ]);
-  if (direct) return direct;
+  const text = page.getByText(/^meditar$/i).first();
+  if (await text.isVisible().catch(() => false)) {
+    const clickable = text.locator('xpath=ancestor-or-self::button[1]').first();
+    if ((await clickable.count().catch(() => 0)) > 0) return clickable;
 
-  const textCandidates = [
-    page.getByText(/meditar/i),
-    page.getByText(/\+?\s*1\s*qi/i)
-  ];
-
-  for (const group of textCandidates) {
-    const count = await group.count().catch(() => 0);
-    for (let i = 0; i < count; i++) {
-      const text = group.nth(i);
-      if (!(await text.isVisible().catch(() => false))) continue;
-
-      const clickable = text.locator('xpath=ancestor-or-self::button[1]').first();
-      if ((await clickable.count().catch(() => 0)) > 0) return clickable;
-
-      const roleButton = text.locator('xpath=ancestor-or-self::*[@role="button"][1]').first();
-      if ((await roleButton.count().catch(() => 0)) > 0) return roleButton;
+    const parentButton = text.locator('xpath=preceding-sibling::button[1]').first();
+    if ((await parentButton.count().catch(() => 0)) > 0 && (await parentButton.isVisible().catch(() => false))) {
+      return parentButton;
     }
   }
 
@@ -213,7 +315,7 @@ async function botaoEstaDisponivel(button) {
       const ariaDisabled = el.getAttribute('aria-disabled');
       const nativeDisabled = 'disabled' in el ? Boolean(el.disabled) : false;
 
-      const looksDisabled =
+      return !(
         nativeDisabled ||
         ariaDisabled === 'true' ||
         style.pointerEvents === 'none' ||
@@ -221,22 +323,66 @@ async function botaoEstaDisponivel(button) {
         style.display === 'none' ||
         /(^|\s)disabled(\s|$)/.test(className) ||
         className.includes('cursor-not-allowed') ||
-        className.includes('pointer-events-none');
-
-      return !looksDisabled;
+        className.includes('pointer-events-none')
+      );
     });
   } catch (_) {
     return false;
   }
 }
 
-async function executar() {
-  const config = carregarConfig();
+async function clicarMeditar(page, config) {
+  const button = await encontrarBotaoMeditar(page);
 
-  if (!credenciaisConfiguradas(config)) {
-    log('Credenciais ainda não configuradas. Edite usuario e senha no config.json ou use os Secrets DAEVA_USER e DAEVA_PASSWORD.');
+  if (!button) {
+    log('Botão +1 QI/Meditar não foi encontrado. Provavelmente ainda não está disponível.');
+    await salvarDiagnostico(page, 'meditar-nao-encontrado');
     return;
   }
+
+  if (!(await botaoEstaDisponivel(button))) {
+    log('Botão de meditação encontrado, mas está desabilitado. Nada será clicado.');
+    await salvarDiagnostico(page, 'meditar-indisponivel');
+    return;
+  }
+
+  const origin = new URL(config.fichaUrl).origin;
+  const responsePromise = page
+    .waitForResponse(
+      (response) => {
+        const request = response.request();
+        return request.method() !== 'GET' && response.url().startsWith(origin);
+      },
+      { timeout: 6000 }
+    )
+    .catch(() => null);
+
+  log('Meditação disponível. Clicando uma única vez em +1 QI.');
+  await button.scrollIntoViewIfNeeded().catch(() => {});
+  await button.click({ timeout: 7000 });
+
+  const response = await responsePromise;
+  await page.waitForTimeout(1800);
+
+  if (response) {
+    log(`Requisição da meditação respondeu HTTP ${response.status()}.`);
+  } else {
+    log('Clique foi enviado; não houve uma resposta HTTP específica capturada para confirmar a ação.');
+  }
+
+  const after = await encontrarBotaoMeditar(page);
+  if (!after || !(await botaoEstaDisponivel(after))) {
+    log('A interface mudou para indisponível após o clique: meditação confirmada pela UI.');
+  } else {
+    log('A interface ainda mostra o botão habilitado após o clique; o servidor continuará sendo a proteção contra clique duplicado nas próximas execuções.');
+  }
+
+  await salvarDiagnostico(page, 'meditacao-realizada');
+}
+
+async function executar() {
+  const config = carregarConfig();
+  validarConfig(config);
 
   const timeoutMs = Number(config.timeoutMs || 30000);
   let browser;
@@ -257,47 +403,19 @@ async function executar() {
     page = await context.newPage();
     page.setDefaultTimeout(timeoutMs);
 
-    const primeiraUrl = config.loginUrl || config.fichaUrl;
-    log(`Abrindo ${config.loginUrl ? 'a tela de login' : 'a ficha'}...`);
-    await page.goto(primeiraUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-    await page.waitForTimeout(1500);
+    await fazerLogin(page, config);
+    await abrirFichaDoPersonagem(page, config);
+    await desbloquearFicha(page, config);
 
-    await fazerLoginSeNecessario(page, config);
-
-    if (!page.url().startsWith(config.fichaUrl)) {
-      log('Abrindo a ficha do personagem.');
-      await page.goto(config.fichaUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-      await page.waitForTimeout(2000);
-      await fazerLoginSeNecessario(page, config);
+    const personagemVisivel = page.getByText(new RegExp(`^${escapeRegExp(config.personagem)}$`, 'i')).first();
+    if (!(await personagemVisivel.isVisible().catch(() => false))) {
+      log('Aviso: o nome do personagem não foi encontrado no conteúdo revelado, mas a rota da ficha foi aberta.');
     }
 
-    const button = await encontrarBotaoMeditar(page);
-
-    if (!button) {
-      log('Botão Meditar/+1 QI não encontrado nesta execução.');
-      await salvarDiagnostico(page, 'botao-nao-encontrado');
-      return;
-    }
-
-    const disponivel = await botaoEstaDisponivel(button);
-
-    if (!disponivel) {
-      log('Meditar encontrado, porém ainda está indisponível. Nada será clicado.');
-      await salvarDiagnostico(page, 'meditar-indisponivel');
-      return;
-    }
-
-    const textoAntes = (await button.innerText().catch(() => 'Meditar')).trim().replace(/\s+/g, ' ');
-    log(`Meditar está disponível (${textoAntes || 'botão encontrado'}). Clicando uma vez...`);
-
-    await button.scrollIntoViewIfNeeded();
-    await button.click({ timeout: 7000 });
-    await page.waitForTimeout(3000);
-
-    await salvarDiagnostico(page, 'meditacao-realizada');
-    log('Clique de meditação enviado. Execução concluída.');
+    await clicarMeditar(page, config);
+    log('Execução finalizada.');
   } catch (error) {
-    log(`ERRO: ${error.message}`);
+    log(`ERRO: ${limparSegredos(error.message)}`);
     if (page) await salvarDiagnostico(page, 'erro-execucao');
     process.exitCode = 1;
   } finally {
