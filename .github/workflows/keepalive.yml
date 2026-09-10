@@ -1,0 +1,28 @@
+name: Keep Daeva scheduler active
+
+on:
+  schedule:
+    # Mantém atividade mensal no repositório público para evitar que schedules
+    # fiquem desativados por inatividade prolongada.
+    - cron: '0 12 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Registrar atividade mensal
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/keepalive.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive.txt
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: keep Daeva scheduler active"
+          git push
