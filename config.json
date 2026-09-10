@@ -1,0 +1,8 @@
+{
+  "fichaUrl": "https://site-fichas-daeva1.vercel.app/ficha/1cbcd154-91e0-4cb7-8049-cafb923ecfac",
+  "loginUrl": "",
+  "usuario": "COLOQUE_SEU_USUARIO_AQUI",
+  "senha": "COLOQUE_SUA_SENHA_AQUI",
+  "headless": true,
+  "timeoutMs": 30000
+}
