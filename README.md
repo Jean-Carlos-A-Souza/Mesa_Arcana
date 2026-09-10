@@ -2,34 +2,55 @@
 
 Bot em Playwright que roda no **GitHub Actions** e executa sozinho o caminho completo do Daeva até a meditação. Ele não depende do seu computador estar ligado.
 
-## Fluxo atual
+## Fluxo
 
-1. Abre `https://site-fichas-daeva1.vercel.app/login`.
-2. Preenche o **e-mail** e a **senha de login**.
-3. Entra na página **Fichas de Personagem**.
-4. Procura a ficha **Han Zhen** e clica nela.
-5. Se a abertura pelo cartão falhar, usa a URL exata da ficha como fallback.
-6. Detecta a tela **Ficha Protegida**.
-7. Preenche a **senha da ficha** e clica em **Revelar Ficha**.
-8. Procura o botão **+1 QI / Meditar**.
-9. Só clica se o elemento estiver visível e habilitado.
-10. Depois do clique, tenta confirmar a requisição e a mudança de estado da interface.
+1. Abre a URL de login configurada em `loginUrl`.
+2. Preenche `email` e `senhaLogin` do `config.json`.
+3. Entra na página principal configurada em `homeUrl`.
+4. Procura exatamente o personagem definido em `personagem`.
+5. Tenta abrir o cartão desse personagem.
+6. Se o cartão não abrir e `fichaUrl` estiver preenchido, usa essa URL como fallback.
+7. Se aparecer **Ficha Protegida**, preenche `senhaFicha` e clica em **Revelar Ficha**.
+8. Confirma dentro da ficha que o nome visível é exatamente o mesmo de `personagem`.
+9. Procura **+1 QI / Meditar**.
+10. Só clica se o botão estiver visível e habilitado.
+11. Faz no máximo um clique por execução.
 
-O workflow executa automaticamente a cada **15 minutos** e também pode ser iniciado manualmente pela aba **Actions**.
+O workflow executa automaticamente **a cada 2 horas** e também pode ser iniciado manualmente pela aba **Actions**.
 
-## O que você precisa preencher
+## Configuração
 
-Abra `config.json` e altere somente estes três valores:
+Tudo que muda de jogador para jogador fica no `config.json`:
 
 ```json
-"email": "SEU_EMAIL",
-"senhaLogin": "SUA_SENHA_DE_LOGIN",
-"senhaFicha": "SUA_SENHA_DA_FICHA"
+{
+  "loginUrl": "https://site-fichas-daeva1.vercel.app/login",
+  "homeUrl": "https://site-fichas-daeva1.vercel.app",
+  "fichaUrl": "URL_DA_FICHA_DO_PERSONAGEM",
+  "personagem": "NOME_EXATO_DO_PERSONAGEM",
+  "email": "SEU_EMAIL",
+  "senhaLogin": "SUA_SENHA_DE_LOGIN",
+  "senhaFicha": "SUA_SENHA_DA_FICHA",
+  "headless": true,
+  "timeoutMs": 30000
+}
 ```
 
-O personagem e as URLs já estão configurados para **Han Zhen**.
+`fichaUrl` é recomendada porque funciona como fallback e como trava de segurança. Se ela estiver preenchida, o bot só aceita meditar nessa URL exata. O nome em `personagem` também é validado dentro da ficha antes do clique.
 
-> Atenção: este repositório está público. Se colocar as senhas diretamente no `config.json`, elas ficarão no histórico do GitHub. Use somente credenciais exclusivas desse RPG, que não sejam reutilizadas em e-mail, Steam, banco ou outros serviços. O bot também aceita os Secrets opcionais `DAEVA_USER`, `DAEVA_PASSWORD` e `DAEVA_SHEET_PASSWORD`.
+## Para outro jogador usar
+
+A forma mais simples é copiar/forkar este repositório para a própria conta do GitHub e alterar somente o `config.json` com:
+
+- `personagem`: nome exato do boneco;
+- `email`: e-mail usado no login;
+- `senhaLogin`: senha da conta;
+- `senhaFicha`: senha específica da ficha;
+- `fichaUrl`: URL da ficha desse personagem.
+
+Depois de fazer commit no `config.json`, o próprio GitHub Actions dispara um teste automático. Se funcionar, o agendamento de 2 em 2 horas continua sozinho.
+
+> Atenção: se o repositório for público, qualquer senha colocada diretamente no `config.json` fica visível no histórico do GitHub. Use apenas credenciais exclusivas desse RPG ou prefira os GitHub Secrets opcionais `DAEVA_USER`, `DAEVA_PASSWORD` e `DAEVA_SHEET_PASSWORD`.
 
 ## Como testar na hora
 
@@ -41,11 +62,9 @@ O personagem e as URLs já estão configurados para **Han Zhen**.
 ## Segurança e diagnóstico
 
 - O bot nunca imprime as senhas nos logs.
-- O HTML de diagnóstico passa por remoção dos valores configurados de e-mail/senhas.
+- O HTML de diagnóstico remove os valores configurados de e-mail e senhas.
 - O clique em meditação é feito uma única vez por execução.
-- Screenshots e HTML de diagnóstico ficam nos artifacts da execução por 7 dias para facilitar ajustes caso o site mude.
+- Se `fichaUrl` estiver configurada, o bot aborta se estiver em outra ficha.
+- O nome do personagem também precisa bater com `personagem` antes do clique.
+- Screenshots e HTML de diagnóstico ficam nos artifacts da execução por 7 dias.
 - O servidor do jogo continua sendo a autoridade final para aceitar ou rejeitar uma meditação.
-
-## URL atual da ficha
-
-`https://site-fichas-daeva1.vercel.app/ficha/1cbcd154-91e0-4cb7-8049-cafb923ecfac`
