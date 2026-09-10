@@ -1,0 +1,14 @@
+{
+  "name": "daeva-auto-meditacao",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bot autônomo para verificar e clicar em Meditar na ficha Daeva.",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "check": "node --check bot.js"
+  },
+  "dependencies": {
+    "playwright": "^1.55.0"
+  }
+}
